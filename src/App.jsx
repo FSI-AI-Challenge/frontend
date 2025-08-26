@@ -12,9 +12,9 @@ import { motion, AnimatePresence } from "framer-motion";
  * - Mock streaming; swap to real API easily (see callBackend)
  */
 
-const WELCOME = "안녕하세요! 챗봇 데모입니다. 무엇을 도와드릴까요?";
+const WELCOME = "안녕하세요! KFC 챗봇입니다. 무엇을 도와드릴까요?";
 
-const USE_MOCK = true; // <- 실제 API 연결 시 false 로 바꾸고 callBackend 의 fetch 경로 주석 해제
+const USE_MOCK = false; // <- 실제 API 연결 시 false 로 바꾸고 callBackend 의 fetch 경로 주석 해제
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -107,7 +107,7 @@ export default function ChatbotFrontend() {
             <div className="p-2 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 text-white shadow">
               <Bot size={18} />
             </div>
-            <h1 className="font-semibold">Chatbot UI</h1>
+            <h1 className="font-semibold">KFC Chatbot</h1>
           </div>
           <div className="flex items-center gap-2">
             {isStreaming ? (
@@ -269,15 +269,28 @@ function formatTime(ts) {
  *  - MOCK streaming: emits tokens with delays (default)
  *  - REAL fetch: Example of JSON or SSE hookup provided in comments
  */
-async function callBackend({ history, prompt, onDelta, signal }) {
-  if (USE_MOCK) {
-    const fake = mockResponse(prompt);
-    for (const token of fake) {
-      await sleep(30 + Math.random() * 60);
-      onDelta(token);
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+async function callBackend({ history, onDelta, signal }) {
+  const res = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: history }),
+    signal,
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    for (const line of chunk.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const { delta } = JSON.parse(payload);
+        if (delta) onDelta(delta);
+      } catch {}
     }
-    return;
   }
 
   // ------- REAL REST (non-streaming) example -------
