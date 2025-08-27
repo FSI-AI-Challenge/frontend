@@ -206,7 +206,7 @@ export default function ChatbotFrontend() {
                       : "max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/60 shadow"
                   }
                 >
-                  <p className="whitespace-pre-wrap leading-relaxed text-[15px]">{m.content}</p>
+                  <p className="whitespace-pre leading-relaxed text-[15px]">{m.content}</p>
                   <div className="mt-2 flex items-center justify-between text-[11px] opacity-70 select-none">
                     <time>{formatTime(m.ts)}</time>
                     <button
@@ -321,6 +321,7 @@ async function callBackend({ history, onDelta, signal }) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let skippedHandshake = false; // ⬅️ 첫 공백(핸드셰이크)만 패스
 
   while (true) {
     const { value, done } = await reader.read();
@@ -340,14 +341,22 @@ async function callBackend({ history, onDelta, signal }) {
 
         let text = "";
         try {
-          const obj = JSON.parse(payload);   // {"delta":"..."}
+          const obj = JSON.parse(payload); // {"delta":"..."} 형태 우선
           text = obj?.delta ?? "";
         } catch {
-          text = payload;                    // raw 문자열도 허용
+          text = payload; // raw 문자열도 허용
         }
 
-        if (text === " ") continue;          // 핸드셰이크 공백 무시
-        if (text) onDelta(text);
+        // ✅ 첫 공백(핸드셰이크)만 무시
+        if (text === " " && !skippedHandshake) {
+          skippedHandshake = true;
+          continue;
+        }
+
+        // ✅ 실제 띄어쓰기 토큰은 NBSP로 변환해서 눈에 보이게
+        if (text === " ") text = "\u00A0";
+
+        if (text !== "") onDelta(text);
       }
     }
   }
