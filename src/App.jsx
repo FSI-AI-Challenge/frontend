@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Bot, Send, User, Trash2, Copy, Square, Play, Moon, Sun } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -29,9 +29,14 @@ export default function ChatbotFrontend() {
   const [dark, setDark] = useState(() =>
     typeof window !== "undefined" ? document.documentElement.classList.contains("dark") : false
   );
+  const [showIntro, setShowIntro] = useState(false);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   const listRef = useRef(null);
   const controllerRef = useRef(null);
+  
+  const asstIdRef = useRef(null);  // 첫 델타로 만든 assistant 메시지 id 저장
+  const reqIdRef  = useRef(0);     // 요청 번호(가드)
 
   useEffect(() => {
     const el = listRef.current;
@@ -44,46 +49,67 @@ export default function ChatbotFrontend() {
     else document.documentElement.classList.remove("dark");
   }, [dark]);
 
+  useEffect(() => {
+    const hide = typeof window !== "undefined" && localStorage.getItem("hideIntro") === "1";
+    setShowIntro(!hide);
+  }, []);
+
   async function handleSend() {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    if (!text) return;
 
-    // 1) push user's message
+    const myReqId = ++reqIdRef.current;     // 이번 요청 번호
+    asstIdRef.current = null;                // 이전 요청 잔재 제거
+
     const userMsg = { id: crypto.randomUUID(), role: "user", content: text, ts: Date.now() };
     setMessages((m) => [...m, userMsg]);
     setInput("");
+    setIsStreaming(true);   // 무조건 켬
 
-    // 2) push placeholder assistant message (for streaming)
-    const asstId = crypto.randomUUID();
-    setMessages((m) => [...m, { id: asstId, role: "assistant", content: "", ts: Date.now() }]);
+    const history = [...messages, userMsg].map((x) => ({ role: x.role, content: x.content }));
 
-    // 3) call backend (mock or real)
-    setIsStreaming(true);
     try {
       controllerRef.current = new AbortController();
+
       await callBackend({
-        history: [...messages, userMsg].map((x) => ({ role: x.role, content: x.content })),
-        prompt: text,
-        onDelta: (delta) => {
-          setMessages((m) =>
-            m.map((msg) => (msg.id === asstId ? { ...msg, content: msg.content + delta } : msg))
-          );
-        },
+        history,
         signal: controllerRef.current.signal,
+        onDelta: (delta) => {
+          if (!delta) return;
+          if (myReqId !== reqIdRef.current) return; // 이전/취소된 요청 델타 무시
+
+          let created = false;
+          setMessages((m) => {
+            // 이번 요청의 고유 id 준비
+            let id = asstIdRef.current;
+            if (!id) {
+              id = crypto.randomUUID();
+              asstIdRef.current = id;
+            }
+
+            // 🔑 핵심: 실제 배열(m)에 그 id가 있는지 확인해서 분기
+            const exists = m.some((msg) => msg.id === id);
+            if (!exists) {
+              created = true; // 첫 델타 → 말풍선 "추가"
+              setIsStreaming(false);
+              return [...m, { id, role: "assistant", content: delta, ts: Date.now() }];
+            }
+            // 이후 델타 → 말풍선 "수정"
+            return m.map((msg) =>
+              msg.id === id ? { ...msg, content: msg.content + delta } : msg
+            );
+          });
+        }
       });
-    } catch (e) {
-      const reason = e?.name === "AbortError" ? "(중단됨)" : "(에러)";
-      setMessages((m) => m.map((msg) => (msg.id === asstId ? { ...msg, content: reason } : msg)));
     } finally {
-      setIsStreaming(false);
-      controllerRef.current = null;
+      setIsStreaming(false); // 스트림 끝난 뒤에만 끄기
     }
   }
 
   function stopStreaming() {
-    try {
-      controllerRef.current?.abort();
-    } catch {}
+    try { controllerRef.current?.abort(); } catch {}
+    reqIdRef.current++;         // 이후 늦게 도착할 델타는 모두 무시
+    setIsStreaming(false);
   }
 
   function clearChat() {
@@ -100,6 +126,15 @@ export default function ChatbotFrontend() {
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
+      <IntroModal
+        open={showIntro}
+        dontShowAgain={dontShowAgain}
+        setDontShowAgain={setDontShowAgain}
+        onConfirm={() => {
+          if (dontShowAgain) localStorage.setItem("hideIntro", "1");
+          setShowIntro(false);
+        }}
+      />
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-neutral-200/60 dark:border-neutral-800/60 backdrop-blur bg-white/70 dark:bg-neutral-900/60">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -269,6 +304,7 @@ function formatTime(ts) {
  *  - MOCK streaming: emits tokens with delays (default)
  *  - REAL fetch: Example of JSON or SSE hookup provided in comments
  */
+
 async function callBackend({ history, onDelta, signal }) {
   const res = await fetch("/api/chat/stream", {
     method: "POST",
@@ -276,22 +312,46 @@ async function callBackend({ history, onDelta, signal }) {
     body: JSON.stringify({ messages: history }),
     signal,
   });
+
+  if (!res.ok || !res.body) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} ${res.statusText} ${txt}`);
+  }
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  let buffer = "";
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n")) {
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") return;
-      try {
-        const { delta } = JSON.parse(payload);
-        if (delta) onDelta(delta);
-      } catch {}
+
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+    let sep;
+    while ((sep = buffer.indexOf("\n\n")) >= 0) {
+      const event = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      for (const line of event.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") return;
+
+        let text = "";
+        try {
+          const obj = JSON.parse(payload);   // {"delta":"..."}
+          text = obj?.delta ?? "";
+        } catch {
+          text = payload;                    // raw 문자열도 허용
+        }
+
+        if (text === " ") continue;          // 핸드셰이크 공백 무시
+        if (text) onDelta(text);
+      }
     }
   }
+}
 
   // ------- REAL REST (non-streaming) example -------
   // const res = await fetch("/api/chat", {
@@ -328,7 +388,6 @@ async function callBackend({ history, onDelta, signal }) {
   //     } catch {}
   //   }
   // }
-}
 
 function mockResponse(prompt) {
   const base = `질문: ${prompt}\n\n이건 모의 응답입니다. 실제 모델/API와 연결하면 여기에 답변이 도착합니다. 연결 방법은 상단 코드의 callBackend() 주석을 참고하세요.`;
@@ -346,4 +405,63 @@ function tokenize(text) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function IntroModal({ open, onConfirm, dontShowAgain, setDontShowAgain }) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+        >
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <motion.div
+            initial={{ y: 40, opacity: 0, scale: 0.98 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="relative w-full sm:max-w-md mx-2 sm:mx-0 rounded-3xl bg-white dark:bg-neutral-900 shadow-2xl border border-neutral-200/60 dark:border-neutral-800/60"
+            role="dialog" aria-modal="true"
+          >
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 text-white grid place-items-center shadow">
+                  <Bot size={18} />
+                </div>
+                <h2 className="text-lg font-semibold">AI가 알려주는 미국식 투자</h2>
+              </div>
+
+              <p className="text-sm leading-relaxed text-neutral-700 dark:text-neutral-300">
+                미국 현지 투자정보와 차별화된 인사이트를 바탕으로 투자 판단을 돕고 질문까지 가능한 AI 에이전트입니다.
+              </p>
+
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                ※ 본 자료는 참고용이며 정확성/완전성을 보장하지 않습니다. 투자 결과는 투자자 본인에게 귀속됩니다.
+              </p>
+
+              <label className="flex items-center gap-2 text-sm select-none">
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border-neutral-300 dark:border-neutral-700"
+                  checked={dontShowAgain}
+                  onChange={(e) => setDontShowAgain(e.target.checked)}
+                />
+                더 이상 보지 않기
+              </label>
+
+              <div className="pt-2">
+                <button
+                  onClick={onConfirm}
+                  className="w-full rounded-2xl px-4 py-3 bg-green-500 text-white hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-400"
+                >
+                  확인
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 }
