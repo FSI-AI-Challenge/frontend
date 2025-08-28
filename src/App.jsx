@@ -1,20 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Bot, Send, User, Trash2, Copy, Square, Play, Moon, Sun } from "lucide-react";
+import { Bot, Send, User, Trash2, Copy, Square, Play, Moon, Sun, CheckCircle2, Loader2, CircleAlert } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-/**
- * Minimal, pretty chat UI (React + Tailwind) — no backend required.
- * - Enter to send (Shift+Enter for newline)
- * - Typing indicator
- * - Copy message
- * - Clear chat
- * - Light/Dark toggle
- * - Mock streaming; swap to real API easily (see callBackend)
- */
-
 const WELCOME = "안녕하세요! KFC 챗봇입니다. 무엇을 도와드릴까요?";
-
-const USE_MOCK = false; // <- 실제 API 연결 시 false 로 바꾸고 callBackend 의 fetch 경로 주석 해제
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -37,6 +25,17 @@ export default function ChatbotFrontend() {
   
   const asstIdRef = useRef(null);  // 첫 델타로 만든 assistant 메시지 id 저장
   const reqIdRef  = useRef(0);     // 요청 번호(가드)
+  const activeUserIdRef = useRef(null); // 진행표시를 붙일 "사용자 메시지" id
+
+  const PROGRESS_STEPS = [
+  { id: "is_our_service"},
+  { id: "chatbot"},
+  { id: "get_goal"},
+  { id: "load_profile"},
+  { id: "hitl_confirm_input"},
+  ];
+  const [progressVisible, setProgressVisible] = useState(false);
+  const [steps, setSteps] = useState(PROGRESS_STEPS.map(s => ({ ...s, state: "idle" })));
 
   useEffect(() => {
     const el = listRef.current;
@@ -62,9 +61,13 @@ export default function ChatbotFrontend() {
     asstIdRef.current = null;                // 이전 요청 잔재 제거
 
     const userMsg = { id: crypto.randomUUID(), role: "user", content: text, ts: Date.now() };
+    activeUserIdRef.current = userMsg.id;
     setMessages((m) => [...m, userMsg]);
     setInput("");
     setIsStreaming(true);   // 무조건 켬
+
+    setProgressVisible(true);                 // 진행표시 ON
+    setSteps(PROGRESS_STEPS.map(s => ({...s, state:"idle"})));
 
     const history = [...messages, userMsg].map((x) => ({ role: x.role, content: x.content }));
 
@@ -74,11 +77,22 @@ export default function ChatbotFrontend() {
       await callBackend({
         history,
         signal: controllerRef.current.signal,
+
+        onProgress: ({ id, status, label }) => {
+          setSteps(prev =>
+            prev.map(s => s.id === id ? { ...s, state: status, label: label ?? s.label } : s)
+          );
+        },
+
+        // ⬇️ 최종 답변 시작 신호 → 진행표시 끄기 (말풍선은 유지)
+        onDone: () => {
+          setProgressVisible(false); // 진행 오버레이 끄기
+        },
+
         onDelta: (delta) => {
           if (!delta) return;
           if (myReqId !== reqIdRef.current) return; // 이전/취소된 요청 델타 무시
 
-          let created = false;
           setMessages((m) => {
             // 이번 요청의 고유 id 준비
             let id = asstIdRef.current;
@@ -90,7 +104,6 @@ export default function ChatbotFrontend() {
             // 🔑 핵심: 실제 배열(m)에 그 id가 있는지 확인해서 분기
             const exists = m.some((msg) => msg.id === id);
             if (!exists) {
-              created = true; // 첫 델타 → 말풍선 "추가"
               setIsStreaming(false);
               return [...m, { id, role: "assistant", content: delta, ts: Date.now() }];
             }
@@ -108,8 +121,15 @@ export default function ChatbotFrontend() {
 
   function stopStreaming() {
     try { controllerRef.current?.abort(); } catch {}
-    reqIdRef.current++;         // 이후 늦게 도착할 델타는 모두 무시
+    reqIdRef.current++;
     setIsStreaming(false);
+    setProgressVisible(false);
+    const id = asstIdRef.current;
+    if (id) {
+      setMessages(m => m.map(msg =>
+        msg.id === id ? { ...msg, pending:false, content: msg.content || "(중단됨)" } : msg
+      ));
+    }
   }
 
   function clearChat() {
@@ -179,75 +199,61 @@ export default function ChatbotFrontend() {
 
       {/* Messages */}
       <main className="max-w-3xl mx-auto px-4">
-        <div ref={listRef} className="h-[calc(100vh-210px)] overflow-y-auto py-6 space-y-4">
+        <div ref={listRef} className="relative h-[calc(100vh-210px)] overflow-y-auto py-6">
           <AnimatePresence initial={false}>
             {messages.map((m) => (
-              <motion.div
-                key={m.id}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.15 }}
-                className={classNames(
-                  "flex w-full gap-3",
-                  m.role === "user" ? "justify-end" : "justify-start"
-                )}
-              >
-                {m.role !== "user" && (
-                  <div className="shrink-0 mt-1 p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
-                    <Bot size={16} />
-                  </div>
-                )}
-
-                <div
-                  className={
-                    m.role === "user"
-                      ? "max-w-[80%] rounded-2xl px-4 py-3 bg-indigo-600 text-white shadow"
-                      : "max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/60 shadow"
-                  }
+              <React.Fragment key={m.id}>
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.15 }}
+                  className={classNames(
+                    "flex w-full gap-3",
+                    m.role === "user" ? "justify-end" : "justify-start"
+                  )}
                 >
-                  <p className="whitespace-pre leading-relaxed text-[15px]">{m.content}</p>
-                  <div className="mt-2 flex items-center justify-between text-[11px] opacity-70 select-none">
-                    <time>{formatTime(m.ts)}</time>
-                    <button
-                      className="inline-flex items-center gap-1 hover:opacity-100"
-                      onClick={() => navigator.clipboard.writeText(m.content)}
-                      title="복사"
-                    >
-                      <Copy size={12} /> 복사
-                    </button>
-                  </div>
-                </div>
+                  {m.role !== "user" && (
+                    <div className="shrink-0 mt-1 p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
+                      <Bot size={16} />
+                    </div>
+                  )}
 
-                {m.role === "user" && (
-                  <div className="shrink-0 mt-1 p-2 rounded-xl bg-indigo-600 text-white">
-                    <User size={16} />
+                  <div
+                    className={
+                      m.role === "user"
+                        ? "max-w-[80%] rounded-2xl px-4 py-3 bg-indigo-600 text-white shadow"
+                        : "max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/60 shadow"
+                    }
+                  >
+                    <p className="whitespace-pre-wrap leading-relaxed text-[15px]">{m.content}</p>
+                    <div className="mt-2 flex items-center justify-between text-[11px] opacity-70 select-none">
+                      <time>{formatTime(m.ts)}</time>
+                      <button
+                        className="inline-flex items-center gap-1 hover:opacity-100"
+                        onClick={() => navigator.clipboard.writeText(m.content || "")}
+                        title="복사"
+                      >
+                        <Copy size={12} /> 복사
+                      </button>
+                    </div>
+                  </div>
+
+                  {m.role === "user" && (
+                    <div className="shrink-0 mt-1 p-2 rounded-xl bg-indigo-600 text-white">
+                      <User size={16} />
+                    </div>
+                  )}
+                </motion.div>
+
+                {/* ✅ 진행표시: 방금 보낸 사용자 메시지 바로 "아래"에 붙이기 */}
+                {progressVisible && m.id === activeUserIdRef.current && (
+                  <div className="flex w-full gap-3 justify-start pl-10"> {/* 봇 아이콘 자투리 여백 맞춤 */}
+                    <BackgroundProgressInline steps={steps} />
                   </div>
                 )}
-              </motion.div>
+              </React.Fragment>
             ))}
-
-            {isStreaming && (
-              <motion.div
-                key="typing"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="flex items-center gap-2 text-sm text-neutral-500"
-              >
-                <div className="p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
-                  <Bot size={16} />
-                </div>
-                <span className="inline-flex gap-1 items-center">
-                  응답 생성 중
-                  <span className="inline-flex">
-                    <Dot />
-                    <Dot delay={0.12} />
-                    <Dot delay={0.24} />
-                  </span>
-                </span>
-              </motion.div>
-            )}
           </AnimatePresence>
         </div>
       </main>
@@ -283,15 +289,6 @@ export default function ChatbotFrontend() {
   );
 }
 
-function Dot({ delay = 0 }) {
-  return (
-    <span
-      className="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
-      style={{ animationDelay: `${delay}s` }}
-    />
-  );
-}
-
 function formatTime(ts) {
   const d = new Date(ts);
   const hh = `${d.getHours()}`.padStart(2, "0");
@@ -299,13 +296,7 @@ function formatTime(ts) {
   return `${hh}:${mm}`;
 }
 
-/**
- * Replace this with your real API. Two modes:
- *  - MOCK streaming: emits tokens with delays (default)
- *  - REAL fetch: Example of JSON or SSE hookup provided in comments
- */
-
-async function callBackend({ history, onDelta, signal }) {
+async function callBackend({ history, onDelta, onProgress, onDone, signal }) {
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -328,7 +319,6 @@ async function callBackend({ history, onDelta, signal }) {
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-
     let sep;
     while ((sep = buffer.indexOf("\n\n")) >= 0) {
       const event = buffer.slice(0, sep);
@@ -339,20 +329,19 @@ async function callBackend({ history, onDelta, signal }) {
         const payload = line.slice(5).trim();
         if (payload === "[DONE]") return;
 
-        let text = "";
-        try {
-          const obj = JSON.parse(payload); // {"delta":"..."} 형태 우선
-          text = obj?.delta ?? "";
-        } catch {
-          text = payload; // raw 문자열도 허용
-        }
+        let obj;
+        try { obj = JSON.parse(payload); } catch { obj = { delta: payload }; }
+        // 🔹 진행 이벤트
+        if (obj.kind === "progress") { onProgress?.(obj); continue; }
+        // 🔹 결과 시작/완료 시 패널 닫기
+        if (obj.kind === "done")     { onDone?.();     continue; }
 
         // ✅ 첫 공백(핸드셰이크)만 무시
+        let text = obj?.delta ?? "";
         if (text === " " && !skippedHandshake) {
           skippedHandshake = true;
           continue;
         }
-
         // ✅ 실제 띄어쓰기 토큰은 NBSP로 변환해서 눈에 보이게
         if (text === " ") text = "\u00A0";
 
@@ -360,60 +349,6 @@ async function callBackend({ history, onDelta, signal }) {
       }
     }
   }
-}
-
-  // ------- REAL REST (non-streaming) example -------
-  // const res = await fetch("/api/chat", {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ messages: history }),
-  //   signal,
-  // });
-  // if (!res.ok) throw new Error("API error");
-  // const data = await res.json(); // { content: string }
-  // onDelta(data.content);
-
-  // ------- REAL SSE (streaming) example -------
-  // const res = await fetch("/api/chat/stream", {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ messages: history }),
-  //   signal,
-  // });
-  // const reader = res.body.getReader();
-  // const decoder = new TextDecoder();
-  // while (true) {
-  //   const { value, done } = await reader.read();
-  //   if (done) break;
-  //   const chunk = decoder.decode(value, { stream: true });
-  //   // Expecting lines like: "data: {\"delta\":\"...\"}\n\n"
-  //   for (const line of chunk.split("\n")) {
-  //     if (!line.startsWith("data:")) continue;
-  //     const payload = line.slice(5).trim();
-  //     if (payload === "[DONE]") break;
-  //     try {
-  //       const { delta } = JSON.parse(payload);
-  //       if (delta) onDelta(delta);
-  //     } catch {}
-  //   }
-  // }
-
-function mockResponse(prompt) {
-  const base = `질문: ${prompt}\n\n이건 모의 응답입니다. 실제 모델/API와 연결하면 여기에 답변이 도착합니다. 연결 방법은 상단 코드의 callBackend() 주석을 참고하세요.`;
-  return tokenize(base);
-}
-
-function tokenize(text) {
-  // super-naive tokenization for demo streaming
-  const parts = [];
-  for (let i = 0; i < text.length; i += Math.max(1, Math.floor(Math.random() * 3))) {
-    parts.push(text.slice(i, i + 1));
-  }
-  return parts;
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function IntroModal({ open, onConfirm, dontShowAgain, setDontShowAgain }) {
@@ -472,5 +407,30 @@ function IntroModal({ open, onConfirm, dontShowAgain, setDontShowAgain }) {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+function BackgroundProgressInline({ steps }) {
+  // idle 제외 → 진행될수록 한 줄씩 늘어남
+  const shown = (steps || []).filter((s) => s.state !== "idle");
+
+  return (
+    <div className="mt-2 max-w-[80%]">
+      <ul className="space-y-1 text-xs sm:text-sm text-neutral-500">
+        {shown.map((s) => (
+          <li key={s.id} className="flex items-center gap-2">
+            {s.state === "running" && (
+              <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse" />
+            )}
+            {s.state === "done" && (
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            )}
+            <span className={s.state === "done" ? "opacity-60" : ""}>
+              {s.label}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
