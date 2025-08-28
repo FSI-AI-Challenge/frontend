@@ -17,8 +17,6 @@ export default function ChatbotFrontend() {
   const [dark, setDark] = useState(() =>
     typeof window !== "undefined" ? document.documentElement.classList.contains("dark") : false
   );
-  const [showIntro, setShowIntro] = useState(false);
-  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   const listRef = useRef(null);
   const controllerRef = useRef(null);
@@ -47,11 +45,6 @@ export default function ChatbotFrontend() {
     if (dark) document.documentElement.classList.add("dark");
     else document.documentElement.classList.remove("dark");
   }, [dark]);
-
-  useEffect(() => {
-    const hide = typeof window !== "undefined" && localStorage.getItem("hideIntro") === "1";
-    setShowIntro(!hide);
-  }, []);
 
   async function handleSend() {
     const text = input.trim();
@@ -146,15 +139,6 @@ export default function ChatbotFrontend() {
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
-      <IntroModal
-        open={showIntro}
-        dontShowAgain={dontShowAgain}
-        setDontShowAgain={setDontShowAgain}
-        onConfirm={() => {
-          if (dontShowAgain) localStorage.setItem("hideIntro", "1");
-          setShowIntro(false);
-        }}
-      />
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-neutral-200/60 dark:border-neutral-800/60 backdrop-blur bg-white/70 dark:bg-neutral-900/60">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -349,65 +333,6 @@ async function callBackend({ history, onDelta, onProgress, onDone, signal }) {
       }
     }
   }
-}
-
-function IntroModal({ open, onConfirm, dontShowAgain, setDontShowAgain }) {
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-        >
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <motion.div
-            initial={{ y: 40, opacity: 0, scale: 0.98 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 20, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="relative w-full sm:max-w-md mx-2 sm:mx-0 rounded-3xl bg-white dark:bg-neutral-900 shadow-2xl border border-neutral-200/60 dark:border-neutral-800/60"
-            role="dialog" aria-modal="true"
-          >
-            <div className="p-6 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 text-white grid place-items-center shadow">
-                  <Bot size={18} />
-                </div>
-                <h2 className="text-lg font-semibold">AI가 알려주는 미국식 투자</h2>
-              </div>
-
-              <p className="text-sm leading-relaxed text-neutral-700 dark:text-neutral-300">
-                미국 현지 투자정보와 차별화된 인사이트를 바탕으로 투자 판단을 돕고 질문까지 가능한 AI 에이전트입니다.
-              </p>
-
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                ※ 본 자료는 참고용이며 정확성/완전성을 보장하지 않습니다. 투자 결과는 투자자 본인에게 귀속됩니다.
-              </p>
-
-              <label className="flex items-center gap-2 text-sm select-none">
-                <input
-                  type="checkbox"
-                  className="size-4 rounded border-neutral-300 dark:border-neutral-700"
-                  checked={dontShowAgain}
-                  onChange={(e) => setDontShowAgain(e.target.checked)}
-                />
-                더 이상 보지 않기
-              </label>
-
-              <div className="pt-2">
-                <button
-                  onClick={onConfirm}
-                  className="w-full rounded-2xl px-4 py-3 bg-green-500 text-white hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-400"
-                >
-                  확인
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
 }
 
 function BackgroundProgressInline({ steps }) {
