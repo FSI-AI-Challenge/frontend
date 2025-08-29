@@ -82,6 +82,20 @@ export default function ChatbotFrontend() {
           setProgressVisible(false); // 진행 오버레이 끄기
         },
 
+        onInterrupt: (intr) => {
+          setMessages((msgs) => [
+            ...msgs,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              type: "interrupt",    // 구분용
+              content: intr.value,  // { message, proposed, fields } 구조 그대로 저장
+              ts: Date.now(),
+            },
+          ]);
+          setIsStreaming(false);
+        },
+        
         onDelta: (delta) => {
           if (!delta) return;
           if (myReqId !== reqIdRef.current) return; // 이전/취소된 요청 델타 무시
@@ -109,6 +123,81 @@ export default function ChatbotFrontend() {
       });
     } finally {
       setIsStreaming(false); // 스트림 끝난 뒤에만 끄기
+    }
+  }
+
+  async function handleHitlSubmit(values, interruptId) {
+    setIsStreaming(true);
+
+    // 1) 메시지 교체: interrupt → 확정 메시지
+    setMessages((msgs) =>
+      msgs.map((msg) =>
+        msg.id === interruptId
+          ? {
+              ...msg,
+              type: "assistant",
+              content: `목표 금액: ${values.target_amount}\n기간: ${values.target_months}\n투자 가능 금액: ${values.investable_amount}`,
+            }
+          : msg
+      )
+    );
+
+    try {
+      controllerRef.current = new AbortController();
+      await callBackend({
+        history: [],
+        resume: values,
+        signal: controllerRef.current.signal,
+
+        onProgress: ({ id, status, label }) => {
+          setSteps((prev) =>
+            prev.map((s) =>
+              s.id === id ? { ...s, state: status, label: label ?? s.label } : s
+            )
+          );
+        },
+
+        onDelta: (delta) => {
+          setMessages((m) => {
+            let id = asstIdRef.current;
+            if (!id) {
+              id = crypto.randomUUID();
+              asstIdRef.current = id;
+            }
+            const exists = m.some((msg) => msg.id === id);
+            if (!exists) {
+              setIsStreaming(false);
+              return [
+                ...m,
+                { id, role: "assistant", content: delta, ts: Date.now() },
+              ];
+            }
+            return m.map((msg) =>
+              msg.id === id ? { ...msg, content: msg.content + delta } : msg
+            );
+          });
+        },
+
+        onInterrupt: (intr) => {
+          setMessages((msgs) => [
+            ...msgs,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              type: "interrupt",
+              content: intr.value,
+              ts: Date.now(),
+            },
+          ]);
+          setIsStreaming(false);
+        },
+
+        onDone: () => {
+          setProgressVisible(false);
+        },
+      });
+    } finally {
+      setIsStreaming(false);
     }
   }
 
@@ -187,52 +276,59 @@ export default function ChatbotFrontend() {
           <AnimatePresence initial={false}>
             {messages.map((m) => (
               <React.Fragment key={m.id}>
-                <motion.div
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.15 }}
-                  className={classNames(
-                    "flex w-full gap-3",
-                    m.role === "user" ? "justify-end" : "justify-start"
-                  )}
-                >
-                  {m.role !== "user" && (
-                    <div className="shrink-0 mt-1 p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
-                      <Bot size={16} />
-                    </div>
-                  )}
-
-                  <div
-                    className={
-                      m.role === "user"
-                        ? "max-w-[80%] rounded-2xl px-4 py-3 bg-indigo-600 text-white shadow"
-                        : "max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/60 shadow"
-                    }
+                {m.type === "interrupt" ? (
+                  <ConfirmInputInline
+                    id={m.id}
+                    data={m.content}
+                    onSubmit={handleHitlSubmit}
+                  />
+                ) : (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.15 }}
+                    className={classNames(
+                      "flex w-full gap-3",
+                      m.role === "user" ? "justify-end" : "justify-start"
+                    )}
                   >
-                    <p className="whitespace-pre-wrap leading-relaxed text-[15px]">{m.content}</p>
-                    <div className="mt-2 flex items-center justify-between text-[11px] opacity-70 select-none">
-                      <time>{formatTime(m.ts)}</time>
-                      <button
-                        className="inline-flex items-center gap-1 hover:opacity-100"
-                        onClick={() => navigator.clipboard.writeText(m.content || "")}
-                        title="복사"
-                      >
-                        <Copy size={12} /> 복사
-                      </button>
-                    </div>
-                  </div>
+                    {m.role !== "user" && (
+                      <div className="shrink-0 mt-1 p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
+                        <Bot size={16} />
+                      </div>
+                    )}
 
-                  {m.role === "user" && (
-                    <div className="shrink-0 mt-1 p-2 rounded-xl bg-indigo-600 text-white">
-                      <User size={16} />
+                    <div
+                      className={
+                        m.role === "user"
+                          ? "max-w-[80%] rounded-2xl px-4 py-3 bg-indigo-600 text-white shadow"
+                          : "max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/60 shadow"
+                      }
+                    >
+                      <p className="whitespace-pre-wrap leading-relaxed text-[15px]">{m.content}</p>
+                      <div className="mt-2 flex items-center justify-between text-[11px] opacity-70 select-none">
+                        <time>{formatTime(m.ts)}</time>
+                        <button
+                          className="inline-flex items-center gap-1 hover:opacity-100"
+                          onClick={() => navigator.clipboard.writeText(m.content || "")}
+                          title="복사"
+                        >
+                          <Copy size={12} /> 복사
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </motion.div>
 
-                {/* ✅ 진행표시: 방금 보낸 사용자 메시지 바로 "아래"에 붙이기 */}
+                    {m.role === "user" && (
+                      <div className="shrink-0 mt-1 p-2 rounded-xl bg-indigo-600 text-white">
+                        <User size={16} />
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+
                 {progressVisible && m.id === activeUserIdRef.current && (
-                  <div className="flex w-full gap-3 justify-start pl-10"> {/* 봇 아이콘 자투리 여백 맞춤 */}
+                  <div className="flex w-full gap-3 justify-start pl-10">
                     <BackgroundProgressInline steps={steps} />
                   </div>
                 )}
@@ -280,11 +376,14 @@ function formatTime(ts) {
   return `${hh}:${mm}`;
 }
 
-async function callBackend({ history, onDelta, onProgress, onDone, signal }) {
-  const res = await fetch("/api/chat/stream", {
+async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, signal, resume }) {
+    const endpoint = "/api/chat/stream";
+    const payload  = resume ? { resume } : { messages: history };
+
+    const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: history }),
+    body: JSON.stringify(payload),
     signal,
   });
 
@@ -319,6 +418,20 @@ async function callBackend({ history, onDelta, onProgress, onDone, signal }) {
         if (obj.kind === "progress") { onProgress?.(obj); continue; }
         // 🔹 결과 시작/완료 시 패널 닫기
         if (obj.kind === "done")     { onDone?.();     continue; }
+
+        if (obj.kind === "interrupt" || obj.__interrupt__ || obj.interrupt) {
+          let intr = null;
+          if (obj.kind === "interrupt" && obj.payload) {
+            intr = obj.payload;
+          } else if (obj.interrupt) {
+            intr = obj.interrupt;
+          } else if (obj.__interrupt__) {
+            const raw = Array.isArray(obj.__interrupt__) ? obj.__interrupt__[0] : obj.__interrupt__;
+            intr = raw?.value ? raw : { value: raw };
+          }
+          if (intr?.value) { onInterrupt?.(intr); }
+          continue;
+        }
 
         // ✅ 첫 공백(핸드셰이크)만 무시
         let text = obj?.delta ?? "";
@@ -356,6 +469,44 @@ function BackgroundProgressInline({ steps }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ConfirmInputInline({ id, data, onSubmit }) {
+  const [values, setValues] = React.useState(data.proposed);
+
+  const handleChange = (e) => {
+    setValues({ ...values, [e.target.name]: e.target.value });
+  };
+
+  return (
+    <div className="bg-gray-100 dark:bg-neutral-800 rounded-xl p-4 my-2 max-w-[80%] shadow">
+      <p className="font-medium mb-3">{data.message}</p>
+
+      <div className="space-y-3">
+        {data.fields.map((field) => (
+          <div key={field.name}>
+            <label className="block text-sm mb-1">{field.label}</label>
+            <input
+              type={field.type}
+              name={field.name}
+              value={values[field.name]}
+              onChange={handleChange}
+              className="w-full border rounded p-2"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <button
+          onClick={() => onSubmit(values, id)}
+          className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+        >
+          확인
+        </button>
+      </div>
     </div>
   );
 }
