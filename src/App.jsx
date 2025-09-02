@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Bot, Send, User, Trash2, Copy, Square, Play, Moon, Sun, CheckCircle2, Loader2, CircleAlert } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-const WELCOME = "안녕하세요! KFC 챗봇입니다. 무엇을 도와드릴까요?";
+const WELCOME = "안녕하세요! KFC 금융 지원 챗봇입니다. 무엇을 도와드릴까요?";
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -26,7 +26,7 @@ export default function ChatbotFrontend() {
   const activeUserIdRef = useRef(null); // 진행표시를 붙일 "사용자 메시지" id
 
   const PROGRESS_STEPS = [
-  { id: "is_our_service"},
+  { id: "planner"},
   { id: "chatbot"},
   { id: "get_goal"},
   { id: "load_profile"},
@@ -395,7 +395,6 @@ async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let skippedHandshake = false; // ⬅️ 첫 공백(핸드셰이크)만 패스
 
   while (true) {
     const { value, done } = await reader.read();
@@ -433,13 +432,7 @@ async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, 
           continue;
         }
 
-        // ✅ 첫 공백(핸드셰이크)만 무시
         let text = obj?.delta ?? "";
-        if (text === " " && !skippedHandshake) {
-          skippedHandshake = true;
-          continue;
-        }
-        // ✅ 실제 띄어쓰기 토큰은 NBSP로 변환해서 눈에 보이게
         if (text === " ") text = "\u00A0";
 
         if (text !== "") onDelta(text);
