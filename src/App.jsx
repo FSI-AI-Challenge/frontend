@@ -106,6 +106,17 @@ export default function ChatbotFrontend() {
             return m.map((msg) => msg.id === id ? { ...msg, content: msg.content + delta } : msg);
           });
         },
+
+        onPortfolios: (portfolio) => {
+          const card = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            type: "portfolio",
+            content: portfolio,  // {fin_name, stock_name, final_amount, allocation}
+            ts: Date.now(),
+          };
+          setMessages((m) => [...m, card]);
+        },
       });
     } finally {
       setIsStreaming(false); // 스트림 끝난 뒤에만 끄기
@@ -196,6 +207,17 @@ export default function ChatbotFrontend() {
         onDone: () => {
           setProgressVisible(false);
         },
+
+        onPortfolios: (portfolio) => {
+          const card = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            type: "portfolio",
+            content: portfolio,  // {fin_name, stock_name, final_amount, allocation}
+            ts: Date.now(),
+          };
+          setMessages((m) => [...m, card]);
+        },
       });
     } finally {
       setIsStreaming(false);
@@ -283,6 +305,8 @@ export default function ChatbotFrontend() {
                     data={m.content}
                     onSubmit={handleHitlSubmit}
                   />
+                ) : m.type === "portfolio" ? (
+                    <PortfolioCard data={m.content} ts={m.ts} />
                 ) : (
                   <motion.div
                     initial={{ opacity: 0, y: 6 }}
@@ -377,7 +401,7 @@ function formatTime(ts) {
   return `${hh}:${mm}`;
 }
 
-async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, signal, resume }) {
+async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, onPortfolios, signal, resume }) {
     const endpoint = "/api/chat/stream";
     const payload  = resume ? { resume } : { messages: history };
 
@@ -418,6 +442,11 @@ async function callBackend({ history, onDelta, onProgress, onDone, onInterrupt, 
         if (obj.kind === "progress") { onProgress?.(obj); continue; }
         // 🔹 결과 시작/완료 시 패널 닫기
         if (obj.kind === "done")     { onDone?.();     continue; }
+
+        if (obj.kind === "portfolio" && obj.portfolio) {
+          onPortfolios?.(obj.portfolio);
+          continue;
+        }
 
         if (obj.kind === "interrupt" || obj.__interrupt__ || obj.interrupt) {
           let intr = null;
@@ -476,7 +505,7 @@ function ConfirmInputInline({ id, data, onSubmit }) {
 
   return (
     <div className="bg-gray-100 dark:bg-neutral-800 rounded-xl p-4 my-3 sm:my-4 max-w-[80%] shadow">
-      <p className="font-medium mb-3">{data.message}</p>
+      <p className="font-medium mb-3 whitespace-pre-wrap">{data.message}</p>
 
       <div className="space-y-3">
         {data.fields.map((field) => (
@@ -512,4 +541,65 @@ function formatValueByType(type, value) {
     return Number.isFinite(n) ? n.toLocaleString("ko-KR") : String(value);
   }
   return String(value);
+}
+
+function PortfolioCard({ data, ts }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+      className="mb-3 sm:mb-4 flex w-full gap-3 justify-start"
+    >
+      {/* 챗봇 아이콘 */}
+      <div className="shrink-0 mt-1 p-2 rounded-xl bg-neutral-200 dark:bg-neutral-800">
+        <Bot size={16} />
+      </div>
+
+      {/* 카드 본문 */}
+      <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-neutral-800 border shadow w-full">
+        <h3 className="font-semibold text-sm mb-2">추천 포트폴리오</h3>
+
+        {/* 금융상품 */}
+        <div className="text-[15px] mb-1">
+          금융상품: {data.fin_name}
+        </div>
+
+        {/* 주식 + 비중 */}
+        <div className="text-[15px] mb-1">
+          주식: {data.stock_name}
+          {data.allocation != null && (
+            <span className="ml-2 text-sm opacity-70">
+              ({data.allocation}% 비중)
+            </span>
+          )}
+        </div>
+
+        {/* 합계 */}
+        <div className="text-[15px] font-bold mt-2">
+          합계: {formatCurrencyKRW(data.final_amount)}
+        </div>
+
+        {/* 푸터: 시간 + JSON 복사 */}
+        <div className="mt-2 text-[11px] opacity-70 select-none flex justify-between">
+          <time>{formatTime(ts)}</time>
+          <button
+            className="inline-flex items-center gap-1 hover:opacity-100"
+            onClick={() =>
+              navigator.clipboard.writeText(JSON.stringify(data, null, 2))
+            }
+            title="JSON 복사"
+          >
+            <Copy size={12} /> JSON 복사
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function formatCurrencyKRW(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n ?? "");
+  return num.toLocaleString("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 });
 }
