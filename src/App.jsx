@@ -20,6 +20,7 @@ export default function ChatbotFrontend() {
 
   const listRef = useRef(null);
   const controllerRef = useRef(null);
+  const bottomRef = useRef(null);
   
   const asstIdRef = useRef(null);  // 첫 델타로 만든 assistant 메시지 id 저장
   const reqIdRef  = useRef(0);     // 요청 번호(가드)
@@ -43,7 +44,7 @@ export default function ChatbotFrontend() {
     const el = listRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [messages, isStreaming]);
+  }, [messages]);
 
   useEffect(() => {
     if (dark) document.documentElement.classList.add("dark");
@@ -360,6 +361,7 @@ export default function ChatbotFrontend() {
               </React.Fragment>
             ))}
           </AnimatePresence>
+          <div ref={bottomRef} />
         </div>
       </main>
 
