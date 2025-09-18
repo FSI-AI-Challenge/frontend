@@ -31,6 +31,10 @@ export default function ChatbotFrontend() {
   { id: "get_goal"},
   { id: "load_profile"},
   { id: "hitl_confirm_input"},
+  { id: "select_fin_prdt"},
+  { id: "select_stock_products"},
+  { id: "build_indicators"},
+  { id: "build_portfolios"},
   ];
   const [progressVisible, setProgressVisible] = useState(false);
   const [steps, setSteps] = useState(PROGRESS_STEPS.map(s => ({ ...s, state: "idle" })));
@@ -83,43 +87,25 @@ export default function ChatbotFrontend() {
         },
 
         onInterrupt: (intr) => {
+          const newId = crypto.randomUUID();
           setMessages((msgs) => [
             ...msgs,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              type: "interrupt",    // 구분용
-              content: intr.value,  // { message, proposed, fields } 구조 그대로 저장
-              ts: Date.now(),
-            },
+            { id: newId, role: "assistant", type: "interrupt", content: intr.value, ts: Date.now() },
           ]);
+          activeUserIdRef.current = newId; // ✅ 새 인터럽트 카드로 진행줄 앵커 이동
           setIsStreaming(false);
         },
         
         onDelta: (delta) => {
-          if (!delta) return;
-          if (myReqId !== reqIdRef.current) return; // 이전/취소된 요청 델타 무시
-
+          if (myReqId !== reqIdRef.current) return; // ✅ 이전/취소된 스트림 무시
           setMessages((m) => {
-            // 이번 요청의 고유 id 준비
             let id = asstIdRef.current;
-            if (!id) {
-              id = crypto.randomUUID();
-              asstIdRef.current = id;
-            }
-
-            // 🔑 핵심: 실제 배열(m)에 그 id가 있는지 확인해서 분기
+            if (!id) { id = crypto.randomUUID(); asstIdRef.current = id; }
             const exists = m.some((msg) => msg.id === id);
-            if (!exists) {
-              setIsStreaming(false);
-              return [...m, { id, role: "assistant", content: delta, ts: Date.now() }];
-            }
-            // 이후 델타 → 말풍선 "수정"
-            return m.map((msg) =>
-              msg.id === id ? { ...msg, content: msg.content + delta } : msg
-            );
+            if (!exists) return [...m, { id, role: "assistant", content: delta, ts: Date.now() }];
+            return m.map((msg) => msg.id === id ? { ...msg, content: msg.content + delta } : msg);
           });
-        }
+        },
       });
     } finally {
       setIsStreaming(false); // 스트림 끝난 뒤에만 끄기
@@ -129,18 +115,33 @@ export default function ChatbotFrontend() {
   async function handleHitlSubmit(values, interruptId) {
     setIsStreaming(true);
 
-    // 1) 메시지 교체: interrupt → 확정 메시지
-    setMessages((msgs) =>
-      msgs.map((msg) =>
+    // ✅ 진행줄 다시 켜고, 어떤 말풍선 아래에 붙을지 지정
+    activeUserIdRef.current = interruptId;  // 확인 메시지 말풍선 아래에 붙임
+    setProgressVisible(true);               // 진행 오버레이 ON
+    setSteps(PROGRESS_STEPS.map(s => ({ ...s, state: "idle" }))); // 상태 리셋
+    asstIdRef.current = null;               // 새 답변 스트림용 말풍선 id 초기화 (권장)
+
+
+    // 1) 메시지 교체: interrupt → 확정 메시지 (fields의 label을 동적으로 사용)
+    setMessages((prev) => {
+      const intrMsg = prev.find((m) => m.id === interruptId);
+      const fields = intrMsg?.content?.fields || [];
+
+      const lines = fields.length
+        ? fields.map((f) => {
+            const label = f.label ?? f.name;
+            const raw   = values?.[f.name];
+            const disp  = formatValueByType(f.type, raw);
+            return `${label}: ${disp}`;
+          })
+        : Object.entries(values || {}).map(([k, v]) => `${k}: ${formatValueByType(undefined, v)}`);
+
+      return prev.map((msg) =>
         msg.id === interruptId
-          ? {
-              ...msg,
-              type: "assistant",
-              content: `목표 금액: ${values.target_amount}\n기간: ${values.target_months}\n투자 가능 금액: ${values.investable_amount}`,
-            }
+          ? { ...msg, role: "assistant", type: "assistant", content: lines.join("\n"), ts: Date.now() }
           : msg
-      )
-    );
+      );
+    });
 
     try {
       controllerRef.current = new AbortController();
@@ -289,7 +290,7 @@ export default function ChatbotFrontend() {
                     exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.15 }}
                     className={classNames(
-                      "flex w-full gap-3",
+                      "mb-3 sm:mb-4 flex w-full gap-3",
                       m.role === "user" ? "justify-end" : "justify-start"
                     )}
                   >
@@ -474,7 +475,7 @@ function ConfirmInputInline({ id, data, onSubmit }) {
   };
 
   return (
-    <div className="bg-gray-100 dark:bg-neutral-800 rounded-xl p-4 my-2 max-w-[80%] shadow">
+    <div className="bg-gray-100 dark:bg-neutral-800 rounded-xl p-4 my-3 sm:my-4 max-w-[80%] shadow">
       <p className="font-medium mb-3">{data.message}</p>
 
       <div className="space-y-3">
@@ -502,4 +503,13 @@ function ConfirmInputInline({ id, data, onSubmit }) {
       </div>
     </div>
   );
+}
+
+function formatValueByType(type, value) {
+  if (value == null || value === "") return "";
+  if (type === "number") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString("ko-KR") : String(value);
+  }
+  return String(value);
 }
