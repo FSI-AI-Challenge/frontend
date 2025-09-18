@@ -503,6 +503,13 @@ function ConfirmInputInline({ id, data, onSubmit }) {
     setValues({ ...values, [e.target.name]: e.target.value });
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();        // 엔터로 줄바꿈 막기
+      onSubmit(values, id);      // 확인 버튼과 동일 동작 실행
+    }
+  };
+
   return (
     <div className="bg-gray-100 dark:bg-neutral-800 rounded-xl p-4 my-3 sm:my-4 max-w-[80%] shadow">
       <p className="font-medium mb-3 whitespace-pre-wrap">{data.message}</p>
@@ -516,6 +523,7 @@ function ConfirmInputInline({ id, data, onSubmit }) {
               name={field.name}
               value={values[field.name]}
               onChange={handleChange}
+              onKeyDown={handleKeyDown}
               className="w-full border rounded p-2"
             />
           </div>
