@@ -36,15 +36,21 @@ export default function ChatbotFrontend() {
   { id: "select_stock_products"},
   { id: "build_indicators"},
   { id: "build_portfolios"},
+  { id: "crawl_news"},
+  { id: "summarize_news"},
+  { id: "analyze_sentiment"},
+  { id: "evaluate_rebalance"},
   ];
   const [progressVisible, setProgressVisible] = useState(false);
   const [steps, setSteps] = useState(PROGRESS_STEPS.map(s => ({ ...s, state: "idle" })));
 
   useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+    if (!bottomRef.current) return;
+    bottomRef.current.scrollIntoView({
+      behavior: progressVisible ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [messages, steps, progressVisible]);
 
   useEffect(() => {
     if (dark) document.documentElement.classList.add("dark");
